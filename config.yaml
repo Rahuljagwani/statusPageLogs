@@ -1,0 +1,6 @@
+scrape_interval: 30
+targets:
+  - name: OpenAI
+    provider: atlassian
+    url: https://status.openai.com
+    scrape_interval: 15
