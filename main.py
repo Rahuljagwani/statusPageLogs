@@ -5,6 +5,7 @@ import asyncio
 from typing import Any
 import aiohttp
 from config import load_config
+from event_log import append_events as log_append_events
 from pipeline.detector import ChangeDetector
 from pipeline.formatter import format_event
 from providers.atlassian import AtlassianAdapter
@@ -32,6 +33,8 @@ async def run_once(
     name = target.get("name", "?")
     for e in new:
         print(format_event(e))
+    if new:
+        log_append_events(new)
     if not new:
         print(f"[{name}] No new events.")
 

@@ -1,14 +1,16 @@
 """
 Webhook receiver: accept provider webhook POSTs, detect provider from payload, dispatch to adapter, print.
+GET /api/events returns last events from log; GET / serves a simple HTML dashboard.
 """
 import json
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 from models import UnifiedEvent
 from pipeline.detector import ChangeDetector
 from pipeline.formatter import format_event
 from providers.atlassian import AtlassianAdapter
 from providers.base import BaseAdapter
+from event_log import append_events as log_append_events, read_last_events
 
 app = FastAPI()
 detector = ChangeDetector()
@@ -44,7 +46,57 @@ async def webhook(request: Request) -> str:
     new = detector.filter_new(events)
     for e in new:
         print(format_event(e))
+    if new:
+        log_append_events(new)
     return "OK"
+
+
+@app.get("/api/events")
+async def get_events(limit: int = 200) -> JSONResponse:
+    """Return the last `limit` logged events (newest first)."""
+    events = read_last_events(limit=limit)
+    return JSONResponse(content={"events": events, "count": len(events)})
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    """Simple HTML page that fetches and displays last events."""
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Status page events</title>
+<style>
+  body { font-family: system-ui; max-width: 900px; margin: 1rem auto; padding: 0 1rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #eee; }
+  th { background: #f5f5f5; }
+  .ts { white-space: nowrap; }
+  .msg { max-width: 400px; }
+</style>
+</head>
+<body>
+  <h1>Status page events (last 24h / 100KB)</h1>
+  <p><a href="/api/events">JSON</a></p>
+  <table>
+    <thead><tr><th class="ts">Time</th><th>Source</th><th>Product</th><th>Status</th><th class="msg">Message</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <script>
+    fetch('/api/events?limit=200')
+      .then(r => r.json())
+      .then(d => {
+        const tbody = document.getElementById('tbody');
+        d.events.forEach(e => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td class="ts">' + (e.timestamp || '') + '</td><td>' + (e.source_id || '') + '</td><td>' + (e.product_name || '') + '</td><td>' + (e.status || '') + '</td><td class="msg">' + (e.message || '').replace(/</g, '&lt;') + '</td>';
+          tbody.appendChild(tr);
+        });
+        if (d.events.length === 0) tbody.innerHTML = '<tr><td colspan="5">No events yet.</td></tr>';
+      })
+      .catch(e => { document.getElementById('tbody').innerHTML = '<tr><td colspan="5">Error loading events.</td></tr>'; });
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 if __name__ == "__main__":
