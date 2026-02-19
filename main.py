@@ -15,6 +15,8 @@ def get_adapter(provider: str) -> BaseAdapter:
     """Return the adapter for the given provider (only atlassian supported for now)."""
     if provider == "atlassian":
         return AtlassianAdapter()
+    # if provider == "status_io":
+    #     raise ValueError("status_io adapter not implemented; add providers/status_io.py to enable")
     raise ValueError(f"Unknown provider: {provider}")
 
 
