@@ -4,3 +4,6 @@ targets:
     provider: atlassian
     url: https://status.openai.com
     scrape_interval: 15
+  - name: GitHub
+    provider: atlassian
+    url: https://www.githubstatus.com
