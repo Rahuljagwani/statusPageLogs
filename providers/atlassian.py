@@ -1,8 +1,10 @@
 """
-Atlassian Statuspage adapter: fetches summary.json and (later) normalizes to UnifiedEvent.
+Atlassian Statuspage adapter: fetches summary.json and normalizes to UnifiedEvent.
 """
 
+from datetime import datetime
 from typing import Any
+
 import aiohttp
 from pydantic import BaseModel
 from providers.base import BaseAdapter
@@ -64,19 +66,40 @@ class AtlassianAdapter(BaseAdapter):
             incidents=[Incident(**i) for i in data.get("incidents", [])],
         )
 
+    def _normalize_to_events(self, summary: StatusPageSummary, source_id: str) -> list[UnifiedEvent]:
+        """Turn summary incidents and their updates into UnifiedEvents (one per update)."""
+        events: list[UnifiedEvent] = []
+        for incident in summary.incidents:
+            for update in incident.incident_updates:
+                ts = update.created_at.replace("Z", "+00:00")
+                timestamp = datetime.fromisoformat(ts)
+                events.append(
+                    UnifiedEvent(
+                        source_id=source_id,
+                        product_name=incident.name,
+                        status=update.status,
+                        message=update.body,
+                        timestamp=timestamp,
+                        event_id=f"{incident.id}_{update.id}",
+                    )
+                )
+        return events
+
     async def fetch_events(
         self,
         session: aiohttp.ClientSession,
         target: dict[str, Any],
     ) -> list[UnifiedEvent]:
-        """Fetch summary; normalization to UnifiedEvent is done in a later task."""
-        await self.fetch_summary(session, target)
-        return []
+        """Fetch summary and return normalized unified events."""
+        summary = await self.fetch_summary(session, target)
+        source_id = target.get("name", summary.page.name)
+        return self._normalize_to_events(summary, source_id)
 
 
 if __name__ == "__main__":
     import asyncio
     import sys
+
     sys.path.insert(0, ".")
     from config import load_config
 
@@ -85,7 +108,8 @@ if __name__ == "__main__":
         target = next(t for t in cfg["targets"] if t["provider"] == "atlassian")
         async with aiohttp.ClientSession() as session:
             adapter = AtlassianAdapter()
-            summary = await adapter.fetch_summary(session, target)
-        print("Raw incident count:", len(summary.incidents))
+            events = await adapter.fetch_events(session, target)
+        for e in events:
+            print(e.model_dump_json())
 
     asyncio.run(main())
