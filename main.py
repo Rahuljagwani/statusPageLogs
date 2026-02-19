@@ -36,19 +36,34 @@ async def run_once(
         print(f"[{name}] No new events.")
 
 
+async def run_target_loop(
+    session: aiohttp.ClientSession,
+    target: dict[str, Any],
+    adapter: BaseAdapter,
+    detector: ChangeDetector,
+    default_interval: int,
+) -> None:
+    """Run one target on its own scrape interval (per-target or global default)."""
+    interval = target.get("scrape_interval") or default_interval
+    while True:
+        await run_once(session, target, adapter, detector)
+        await asyncio.sleep(interval)
+
+
 async def main() -> None:
     cfg = load_config()
     targets = cfg["targets"]
-    interval = cfg.get("scrape_interval", 30)
+    default_interval = cfg.get("scrape_interval", 30)
     detector = ChangeDetector()
     adapters = [(t, get_adapter(t["provider"])) for t in targets]
 
     async with aiohttp.ClientSession() as session:
-        while True:
-            await asyncio.gather(
-                *[run_once(session, target, adapter, detector) for target, adapter in adapters]
-            )
-            await asyncio.sleep(interval)
+        await asyncio.gather(
+            *[
+                run_target_loop(session, target, adapter, detector, default_interval)
+                for target, adapter in adapters
+            ]
+        )
 
 
 if __name__ == "__main__":

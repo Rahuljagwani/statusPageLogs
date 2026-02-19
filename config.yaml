@@ -3,7 +3,13 @@ targets:
   - name: OpenAI
     provider: atlassian
     url: https://status.openai.com
-    scrape_interval: 15
+    scrape_interval: 30
   - name: GitHub
     provider: atlassian
     url: https://www.githubstatus.com
+  - name: Jira
+    provider: atlassian
+    url: https://jira-software.status.atlassian.com
+  - name: Confluence
+    provider: atlassian
+    url: https://confluence.status.atlassian.com
