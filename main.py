@@ -29,8 +29,11 @@ async def run_once(
     """Scrape one target, filter to new events, print formatted."""
     events = await adapter.fetch_events(session, target)
     new = detector.filter_new(events)
+    name = target.get("name", "?")
     for e in new:
         print(format_event(e))
+    if not new:
+        print(f"[{name}] No new events.")
 
 
 async def main() -> None:
@@ -41,7 +44,7 @@ async def main() -> None:
     adapters = [(t, get_adapter(t["provider"])) for t in targets]
 
     async with aiohttp.ClientSession() as session:
-        for _ in range(2):
+        while True:
             await asyncio.gather(
                 *[run_once(session, target, adapter, detector) for target, adapter in adapters]
             )

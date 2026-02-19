@@ -164,38 +164,3 @@ class AtlassianAdapter(BaseAdapter):
                 )
             )
         return events
-
-
-if __name__ == "__main__":
-    import asyncio
-    import sys
-
-    sys.path.insert(0, ".")
-    from config import load_config
-
-    async def main() -> None:
-        cfg = load_config()
-        target = next(t for t in cfg["targets"] if t["provider"] == "atlassian")
-        async with aiohttp.ClientSession() as session:
-            adapter = AtlassianAdapter()
-            events = await adapter.fetch_events(session, target)
-        for e in events:
-            print(e.model_dump_json())
-
-    def main_webhook_sample() -> None:
-        """Run parse_webhook with a sample incident payload and print unified events."""
-        sample = """
-        {"page":{"id":"test-page","status_indicator":"major","status_description":"Partial Outage"},
-         "incident":{"id":"inc-1","name":"API Degradation","status":"monitoring",
-         "incident_updates":[{"id":"upd-1","body":"We are monitoring.","status":"monitoring",
-         "created_at":"2025-11-03T14:32:00Z"}]}}
-        """
-        adapter = AtlassianAdapter()
-        events = adapter.parse_webhook(sample.strip(), {})
-        for e in events:
-            print(e.model_dump_json())
-
-    if len(sys.argv) > 1 and sys.argv[1] == "webhook":
-        main_webhook_sample()
-    else:
-        asyncio.run(main())
