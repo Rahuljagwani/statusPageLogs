@@ -2,13 +2,15 @@
 Atlassian Statuspage adapter: fetches summary.json and normalizes to UnifiedEvent.
 """
 
+import json
 from datetime import datetime
 from typing import Any
 
 import aiohttp
 from pydantic import BaseModel
-from providers.base import BaseAdapter
+
 from models import UnifiedEvent
+from providers.base import BaseAdapter
 
 
 class PageInfo(BaseModel):
@@ -49,22 +51,35 @@ class StatusPageSummary(BaseModel):
 class AtlassianAdapter(BaseAdapter):
     """Fetch and normalize Atlassian Statuspage summary.json."""
 
+    def __init__(self) -> None:
+        # url -> (summary, last_modified) for conditional GET
+        self._cache: dict[str, tuple[StatusPageSummary, str]] = {}
+
     async def fetch_summary(
         self,
         session: aiohttp.ClientSession,
         target: dict[str, Any],
     ) -> StatusPageSummary:
-        """GET summary.json and return parsed model."""
+        """GET summary.json; use If-Modified-Since and return cached summary on 304."""
         base_url = target["url"].rstrip("/")
         url = f"{base_url}/api/v2/summary.json"
-        async with session.get(url) as resp:
+        headers: dict[str, str] = {}
+        if url in self._cache:
+            _, last_modified = self._cache[url]
+            headers["If-Modified-Since"] = last_modified
+        async with session.get(url, headers=headers or None) as resp:
+            if resp.status == 304:
+                return self._cache[url][0]
             resp.raise_for_status()
+            last_modified = resp.headers.get("Last-Modified") or ""
             data = await resp.json()
-        return StatusPageSummary(
+        summary = StatusPageSummary(
             page=PageInfo(**data["page"]),
             components=[Component(**c) for c in data.get("components", [])],
             incidents=[Incident(**i) for i in data.get("incidents", [])],
         )
+        self._cache[url] = (summary, last_modified)
+        return summary
 
     def _normalize_to_events(self, summary: StatusPageSummary, source_id: str) -> list[UnifiedEvent]:
         """Turn summary incidents and their updates into UnifiedEvents (one per update)."""
@@ -95,6 +110,61 @@ class AtlassianAdapter(BaseAdapter):
         source_id = target.get("name", summary.page.name)
         return self._normalize_to_events(summary, source_id)
 
+    def parse_webhook(
+        self,
+        body: bytes | str,
+        headers: dict[str, str],
+    ) -> list[UnifiedEvent]:
+        """Parse Statuspage webhook POST (incident or component_update) into unified events."""
+        if isinstance(body, bytes):
+            body = body.decode("utf-8")
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return []
+        events: list[UnifiedEvent] = []
+        page = data.get("page") or {}
+        source_id = page.get("id", "atlassian")
+        if "incident" in data:
+            inc = data["incident"]
+            name = inc.get("name", "Incident")
+            inc_id = inc.get("id", "")
+            for upd in inc.get("incident_updates", []):
+                ts = (upd.get("created_at") or "").replace("Z", "+00:00")
+                try:
+                    timestamp = datetime.fromisoformat(ts) if ts else datetime.now()
+                except ValueError:
+                    timestamp = datetime.now()
+                events.append(
+                    UnifiedEvent(
+                        source_id=source_id,
+                        product_name=name,
+                        status=upd.get("status", ""),
+                        message=upd.get("body", ""),
+                        timestamp=timestamp,
+                        event_id=f"{inc_id}_{upd.get('id', '')}",
+                    )
+                )
+        if "component_update" in data and "component" in data:
+            comp = data["component"]
+            upd = data["component_update"]
+            ts = (upd.get("created_at") or "").replace("Z", "+00:00")
+            try:
+                timestamp = datetime.fromisoformat(ts) if ts else datetime.now()
+            except ValueError:
+                timestamp = datetime.now()
+            events.append(
+                UnifiedEvent(
+                    source_id=source_id,
+                    product_name=comp.get("name", "Component"),
+                    status=upd.get("new_status", ""),
+                    message=f"Status: {upd.get('old_status', '')} -> {upd.get('new_status', '')}",
+                    timestamp=timestamp,
+                    event_id=f"comp_{comp.get('id', '')}_{upd.get('id', '')}",
+                )
+            )
+        return events
+
 
 if __name__ == "__main__":
     import asyncio
@@ -112,4 +182,20 @@ if __name__ == "__main__":
         for e in events:
             print(e.model_dump_json())
 
-    asyncio.run(main())
+    def main_webhook_sample() -> None:
+        """Run parse_webhook with a sample incident payload and print unified events."""
+        sample = """
+        {"page":{"id":"test-page","status_indicator":"major","status_description":"Partial Outage"},
+         "incident":{"id":"inc-1","name":"API Degradation","status":"monitoring",
+         "incident_updates":[{"id":"upd-1","body":"We are monitoring.","status":"monitoring",
+         "created_at":"2025-11-03T14:32:00Z"}]}}
+        """
+        adapter = AtlassianAdapter()
+        events = adapter.parse_webhook(sample.strip(), {})
+        for e in events:
+            print(e.model_dump_json())
+
+    if len(sys.argv) > 1 and sys.argv[1] == "webhook":
+        main_webhook_sample()
+    else:
+        asyncio.run(main())
